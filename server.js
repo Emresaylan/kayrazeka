@@ -13,14 +13,14 @@ app.use(express.json({ limit: "32kb" }));
 app.use("/api", rateLimit({ windowMs: 60_000, limit: 30, standardHeaders: "draft-7", legacyHeaders: false }));
 app.use(express.static(path.join(root, "public")));
 
-const model = process.env.GEMINI_MODEL || "gemini-3.8-flash";
+const model = process.env.GROQ_MODEL || "openai/gpt-oss-20b";
 const apiKey = () => {
-  if (!process.env.GEMINI_API_KEY) throw new Error("GEMINI_API_KEY_MISSING");
-  return process.env.GEMINI_API_KEY;
+  if (!process.env.GROQ_API_KEY) throw new Error("GROQ_API_KEY_MISSING");
+  return process.env.GROQ_API_KEY;
 };
 
 app.get("/api/health", (_req, res) => res.json({ ok: true, service: "Kayra Zeka" }));
-app.get("/api/config", (_req, res) => res.json({ ready: Boolean(process.env.GEMINI_API_KEY), model, provider: "Gemini" }));
+app.get("/api/config", (_req, res) => res.json({ ready: Boolean(process.env.GROQ_API_KEY), model, provider: "Groq" }));
 
 app.post("/api/chat", async (req, res) => {
   try {
@@ -30,52 +30,53 @@ app.post("/api/chat", async (req, res) => {
 
     const history = Array.isArray(req.body?.history)
       ? req.body.history.slice(-8).map(m => ({
-          role: m?.role === "assistant" ? "model" : "user",
-          parts: [{ text: String(m?.content || "").slice(0, 4000) }]
-        })).filter(m => m.parts[0].text.trim())
+          role: m?.role === "assistant" ? "assistant" : "user",
+          content: String(m?.content || "").slice(0, 4000)
+        })).filter(m => m.content.trim())
       : [];
 
-    const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`, {
+    const response = await fetch("https://api.groq.com/openai/v1/chat/completions", {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        "x-goog-api-key": apiKey()
+        "Authorization": `Bearer ${apiKey()}`
       },
       body: JSON.stringify({
-        systemInstruction: {
-          parts: [{
-            text: "Sen Kayra Zeka adlı Türkçe yapay zekâ asistanısın. Matematik, kimya, astronomi, astrofizik, tarih ve genel konularda açık, öğretici ve doğru yanıt ver. Adım adım açıklama istendiğinde çözümü gerekçeleriyle anlat. Bilmediğin bilgiyi uydurma; belirsizliği belirt. Tehlikeli veya hassas konularda güvenli davran."
-          }]
-        },
-        contents: [...history, { role: "user", parts: [{ text: message }] }],
-        generationConfig: { temperature: 0.7 }
+        model,
+        messages: [
+          {
+            role: "system",
+            content: "Sen Kayra Zeka adlı Türkçe yapay zekâ asistanısın. Matematik, kimya, astronomi, astrofizik, tarih ve genel konularda açık, öğretici ve doğru yanıt ver. Adım adım açıklama istendiğinde çözümü gerekçeleriyle anlat. Bilmediğin bilgiyi uydurma; belirsizliği belirt. Tehlikeli veya hassas konularda güvenli davran."
+          },
+          ...history,
+          { role: "user", content: message }
+        ],
+        temperature: 0.7,
+        max_completion_tokens: 2048
       })
     });
 
     const data = await response.json().catch(() => ({}));
     if (!response.ok) {
-      const detail = data?.error?.message || "Gemini API isteği başarısız oldu.";
+      const detail = data?.error?.message || "Groq API isteği başarısız oldu.";
       const err = new Error(detail);
       err.status = response.status;
       throw err;
     }
-    const answer = data?.candidates?.[0]?.content?.parts
-      ?.map(part => part.text || "")
-      .join("")
-      .trim();
+    const answer = data?.choices?.[0]?.message?.content?.trim();
     res.json({ answer: answer || "Bu soruya şu an yanıt oluşturamadım." });
   } catch (err) {
     console.error("chat_error", err?.status || "", err?.message || err);
-    if (err?.message === "GEMINI_API_KEY_MISSING") {
-      return res.status(503).json({ error: "Gemini henüz etkinleştirilmedi. Render ortam değişkenlerine GEMINI_API_KEY eklenmesi gerekiyor." });
+    if (err?.message === "GROQ_API_KEY_MISSING") {
+      return res.status(503).json({ error: "Groq henüz etkinleştirilmedi. Render ortam değişkenlerine GROQ_API_KEY eklenmesi gerekiyor." });
     }
     if (err?.status === 429) {
-      return res.status(429).json({ error: "Gemini ücretsiz kullanım kotası dolmuş olabilir. Biraz bekleyip tekrar dene veya Google AI Studio kota durumunu kontrol et." });
+      return res.status(429).json({ error: "Groq kullanım kotası veya hız sınırı dolmuş olabilir. Biraz bekleyip tekrar dene ya da Groq Console limitlerini kontrol et." });
     }
     if (err?.status === 401 || err?.status === 403) {
-      return res.status(502).json({ error: "Gemini API anahtarı geçersiz olabilir veya bu model için erişim yok. Render'daki GEMINI_API_KEY ve Google AI Studio ayarlarını kontrol et." });
+      return res.status(502).json({ error: "Groq API anahtarı geçersiz olabilir veya erişim izni yok. Render'daki GROQ_API_KEY ve Groq Console ayarlarını kontrol et." });
     }
-    res.status(502).json({ error: "Gemini'den yanıt alınamadı. API anahtarını, model erişimini ve Google AI Studio durumunu kontrol et." });
+    res.status(502).json({ error: "Groq'tan yanıt alınamadı. API anahtarını, model erişimini ve Groq durumunu kontrol et." });
   }
 });
 
