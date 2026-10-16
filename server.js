@@ -11,7 +11,7 @@ app.set("trust proxy", 1);
 app.use(helmet({ contentSecurityPolicy: false }));
 app.use(express.json({ limit: "32kb" }));
 app.use("/api", rateLimit({ windowMs: 60_000, limit: 30, standardHeaders: "draft-7", legacyHeaders: false }));
-app.use(express.static(path.join(root, "public")));
+app.use(express.static(path.join(root, "public"), { setHeaders(res, filePath) { if (filePath.endsWith(".html")) res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate"); } }));
 
 const model = process.env.GROQ_MODEL || "openai/gpt-oss-20b";
 const apiKey = () => {
@@ -80,6 +80,6 @@ app.post("/api/chat", async (req, res) => {
   }
 });
 
-app.get("*", (_req, res) => res.sendFile(path.join(root, "public", "index.html")));
+app.get("*", (_req, res) => { res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate"); res.sendFile(path.join(root, "public", "index.html")); });
 const port = Number(process.env.PORT) || 3000;
 app.listen(port, "0.0.0.0", () => console.log(`Kayra Zeka listening on ${port}`));
